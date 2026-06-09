@@ -1,0 +1,19 @@
+# Sentinel Earn
+
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+env/
+node_modules/
+dist/
+build/
+*.db
+workspace/
+.cache/
+.env
+*.log
+.DS_Store
+Thumbs.db
+desktop/out/

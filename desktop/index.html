@@ -1,0 +1,79 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Sentinel Earn</title>
+  <link rel="stylesheet" href="styles.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="orb"></span>
+      <div>
+        <h1>Sentinel Earn</h1>
+        <p class="tagline">Bounty pipeline · Ollama patches · PR submission</p>
+      </div>
+    </div>
+    <nav class="tabs">
+      <button class="tab active" data-tab="bounties">Active Bounties</button>
+      <button class="tab" data-tab="patches">Patch Queue</button>
+      <button class="tab" data-tab="history">Submissions</button>
+      <button class="tab" data-tab="earnings">Earnings</button>
+      <button class="tab" data-tab="settings">Settings</button>
+    </nav>
+    <div class="status-pill" id="ollama-status">Ollama: checking…</div>
+  </header>
+
+  <main>
+    <section id="panel-bounties" class="panel active">
+      <div class="toolbar">
+        <button id="scan-github" class="btn primary">Scan GitHub Bounties</button>
+        <button id="scan-hackerone" class="btn">Scan HackerOne Programs</button>
+        <button id="run-cycle" class="btn ghost">Run Full Cycle</button>
+      </div>
+      <div class="split">
+        <div>
+          <h2>GitHub Issues</h2>
+          <div id="github-list" class="card-list"></div>
+        </div>
+        <div>
+          <h2>HackerOne Programs</h2>
+          <div id="h1-list" class="card-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <section id="panel-patches" class="panel">
+      <div class="toolbar">
+        <button id="refresh-patches" class="btn ghost">Refresh</button>
+      </div>
+      <div id="patch-list" class="card-list"></div>
+    </section>
+
+    <section id="panel-history" class="panel">
+      <div id="history-list" class="card-list"></div>
+    </section>
+
+    <section id="panel-earnings" class="panel">
+      <div id="earnings-stats" class="stats-grid"></div>
+    </section>
+
+    <section id="panel-settings" class="panel">
+      <form id="settings-form" class="settings-form">
+        <label>Ollama Host<input name="ollama_host" type="text" placeholder="http://127.0.0.1:11434" /></label>
+        <label>Ollama Model<input name="ollama_model" type="text" placeholder="qwen2.5-coder:14b" /></label>
+        <label>GitHub Token<input name="github_token" type="password" autocomplete="off" /></label>
+        <label>GitHub Username<input name="github_username" type="text" /></label>
+        <label>HackerOne Username<input name="hackerone_username" type="text" /></label>
+        <label>HackerOne API Token<input name="hackerone_api_token" type="password" autocomplete="off" /></label>
+        <label class="checkbox"><input name="auto_generate_patches" type="checkbox" /> Auto-generate patches on scan</label>
+        <button type="submit" class="btn primary">Save Settings</button>
+      </form>
+    </section>
+  </main>
+
+  <footer id="toast" class="toast hidden"></footer>
+  <script src="renderer.js"></script>
+</body>
+</html>
