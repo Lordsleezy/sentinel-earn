@@ -52,6 +52,12 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: false
         run: npm run dist
 
+      - name: Read app version
+        id: version
+        working-directory: desktop
+        shell: bash
+        run: echo "version=$(node -p \"require('./package.json').version\")" >> $GITHUB_OUTPUT
+
       - name: Upload installer artifact
         uses: actions/upload-artifact@v4
         with:
@@ -64,11 +70,12 @@ jobs:
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v${{ github.run_number }}
-          name: Sentinel Earn v${{ github.run_number }}
+          tag_name: v${{ steps.version.outputs.version }}
+          name: Sentinel Earn v${{ steps.version.outputs.version }}
           files: |
             desktop/release/*.exe
             desktop/release/latest.yml
           generate_release_notes: true
+          make_latest: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
