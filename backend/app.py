@@ -10,6 +10,8 @@ from flask_cors import CORS
 
 from sentinel_earn.config import apply_settings, load_settings, save_settings
 from sentinel_earn import db
+from sentinel_earn.setup_engine import get_setup_engine
+from sentinel_earn import ollama_runtime
 from sentinel_earn.pipeline import (
     get_dashboard,
     scan_github_bounties,
@@ -31,6 +33,7 @@ app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 start_background_worker(interval_sec=45)
+get_setup_engine().start_background()
 
 
 @app.route("/api/ping")
@@ -125,16 +128,50 @@ def settings():
     return jsonify({"status": "ok"})
 
 
+@app.route("/api/setup/status")
+def setup_status():
+    setup = get_setup_engine().snapshot()
+    ready = ollama_runtime.load_ready()
+    return jsonify({
+        **setup,
+        "setup_complete": bool(setup.get("complete") or ollama_runtime.is_setup_complete()),
+        "ollama_installed": ollama_runtime.ollama_installed(),
+        "ollama_running": ollama_runtime.ollama_running(),
+        "ready_model": ready.get("model"),
+    })
+
+
+@app.route("/api/setup/retry", methods=["POST"])
+def setup_retry():
+    get_setup_engine().retry()
+    return jsonify({"status": "started"})
+
+
+@app.route("/api/health")
+def health():
+    setup = get_setup_engine().snapshot()
+    host = load_settings().get("ollama_host", "http://127.0.0.1:11434").rstrip("/")
+    ollama_online = ollama_runtime.ollama_running()
+    models = list(ollama_runtime.list_installed_models().keys()) if ollama_online else []
+    return jsonify({
+        "backend": "online",
+        "setup_complete": bool(setup.get("complete") or ollama_runtime.is_setup_complete()),
+        "setup": setup,
+        "ollama": {
+            "online": ollama_online,
+            "installed": ollama_runtime.ollama_installed(),
+            "host": host,
+            "models": models,
+        },
+    })
+
+
 @app.route("/api/ollama/status")
 def ollama_status():
-    import httpx
     host = load_settings().get("ollama_host", "http://127.0.0.1:11434").rstrip("/")
-    try:
-        r = httpx.get(f"{host}/api/tags", timeout=5)
-        models = [m.get("name") for m in r.json().get("models", [])] if r.status_code == 200 else []
-        return jsonify({"online": r.status_code == 200, "models": models, "host": host})
-    except Exception as e:
-        return jsonify({"online": False, "error": str(e), "host": host})
+    online = ollama_runtime.ollama_running()
+    models = list(ollama_runtime.list_installed_models().keys()) if online else []
+    return jsonify({"online": online, "models": models, "host": host})
 
 
 @app.route("/api/logs")

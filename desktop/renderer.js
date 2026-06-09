@@ -1,10 +1,18 @@
 let API = 'http://127.0.0.1:5120';
 let backendReady = false;
+let setupComplete = false;
 
 async function initApi() {
   if (window.sentinelEarn) {
     API = await window.sentinelEarn.getApiBase();
   }
+}
+
+function setStartupProgress(percent, detail) {
+  const fill = document.getElementById('setup-progress-fill');
+  const detailEl = document.getElementById('setup-progress-detail');
+  if (fill) fill.style.width = `${Math.max(0, Math.min(100, percent || 0))}%`;
+  if (detailEl && detail) detailEl.textContent = detail;
 }
 
 async function waitForBackendReady() {
@@ -32,20 +40,21 @@ async function waitForBackendReady() {
       if (status?.state === 'ready') {
         done = true;
         backendReady = true;
-        overlay?.classList.add('hidden');
         if (status.api) API = status.api;
+        if (msg) msg.textContent = 'Setting up Sentinel Earn engine…';
+        setStartupProgress(5, 'Backend connected');
         resolve(true);
         return;
       }
       if (status?.state === 'starting' && msg) {
         msg.textContent = 'Starting Sentinel Earn engine…';
+        setStartupProgress(2, 'Launching Python backend…');
       }
       if (status?.state === 'error') {
         done = true;
-        overlay?.classList.add('hidden');
         if (msg) {
           msg.textContent = status.message || 'Backend failed to start';
-          overlay?.classList.remove('hidden');
+          setStartupProgress(0, status.message || 'Backend failed to start');
         }
         resolve(false);
       }
@@ -57,6 +66,51 @@ async function waitForBackendReady() {
       if (status?.state === 'ready' && status.api) API = status.api;
     });
   });
+}
+
+async function pollSetupStatus() {
+  const overlay = document.getElementById('startup-overlay');
+  const setupErr = document.getElementById('setup-error');
+  const msg = document.getElementById('startup-message');
+
+  for (let i = 0; i < 7200; i++) {
+    try {
+      const d = await fetch(`${API}/api/setup/status`).then((r) => r.json());
+      const pct = Number(d.percent || 0);
+      setStartupProgress(pct, d.message || 'Setting up…');
+
+      if (d.phase === 'error' || d.error) {
+        overlay?.classList.add('hidden');
+        setupErr?.classList.remove('hidden');
+        const errMsg = document.getElementById('setup-error-message');
+        if (errMsg) errMsg.textContent = d.error || d.message || 'Setup failed.';
+        const ollamaBtn = document.getElementById('setup-ollama-btn');
+        if (ollamaBtn) {
+          const show = d.action === 'manual' && d.url;
+          ollamaBtn.classList.toggle('hidden', !show);
+          if (show) {
+            ollamaBtn.onclick = () => window.sentinelEarn?.openExternal(d.url);
+          }
+        }
+        return false;
+      }
+
+      if (d.complete || d.setup_complete) {
+        setupComplete = true;
+        setStartupProgress(100, 'Ready');
+        overlay?.classList.add('hidden');
+        return true;
+      }
+
+      if (msg && d.message) msg.textContent = 'Setting up Sentinel Earn engine…';
+    } catch {
+      setStartupProgress(0, 'Waiting for backend…');
+    }
+    await new Promise((r) => setTimeout(r, 1000));
+  }
+
+  overlay?.classList.add('hidden');
+  return false;
 }
 
 async function api(path, opts = {}) {
@@ -102,20 +156,51 @@ function refreshCurrentPanel(tab) {
   if (tab === 'settings') loadSettings();
 }
 
-async function loadOllamaStatus() {
-  const el = document.getElementById('ollama-status');
+async function loadHealthStatus() {
+  const backendEl = document.getElementById('backend-status');
+  const ollamaEl = document.getElementById('ollama-status');
+
   if (!backendReady) {
-    el.textContent = 'Starting engine…';
-    el.className = 'status-pill';
+    if (backendEl) {
+      backendEl.textContent = 'Backend: starting…';
+      backendEl.className = 'status-pill';
+    }
+    if (ollamaEl) {
+      ollamaEl.textContent = 'Ollama: waiting…';
+      ollamaEl.className = 'status-pill';
+    }
     return;
   }
+
+  if (backendEl) {
+    backendEl.textContent = 'Backend: online';
+    backendEl.className = 'status-pill online';
+  }
+
   try {
-    const d = await api('/api/ollama/status');
-    el.textContent = d.online ? `Ollama: online (${d.models?.length || 0} models)` : 'Ollama: offline';
-    el.className = 'status-pill ' + (d.online ? 'online' : 'offline');
+    const d = await api('/api/health');
+    const ollama = d.ollama || {};
+    if (ollamaEl) {
+      if (ollama.online) {
+        ollamaEl.textContent = `Ollama: online (${(ollama.models || []).length} models)`;
+        ollamaEl.className = 'status-pill online';
+      } else if (ollama.installed) {
+        ollamaEl.textContent = 'Ollama: offline';
+        ollamaEl.className = 'status-pill offline';
+      } else {
+        ollamaEl.textContent = 'Ollama: not installed';
+        ollamaEl.className = 'status-pill offline';
+      }
+    }
   } catch {
-    el.textContent = 'Backend: offline';
-    el.className = 'status-pill offline';
+    if (backendEl) {
+      backendEl.textContent = 'Backend: offline';
+      backendEl.className = 'status-pill offline';
+    }
+    if (ollamaEl) {
+      ollamaEl.textContent = 'Ollama: unknown';
+      ollamaEl.className = 'status-pill offline';
+    }
   }
 }
 
@@ -290,12 +375,24 @@ document.getElementById('settings-form').onsubmit = async (e) => {
   body.auto_generate_patches = !!fd.get('auto_generate_patches');
   await api('/api/settings', { method: 'POST', body: JSON.stringify(body) });
   toast('Settings saved');
-  loadOllamaStatus();
+  loadHealthStatus();
   loadBounties();
 };
 
 document.getElementById('goto-settings-token')?.addEventListener('click', () => {
   document.querySelector('.tab[data-tab="settings"]')?.click();
+});
+
+document.getElementById('setup-retry-btn')?.addEventListener('click', async () => {
+  document.getElementById('setup-error')?.classList.add('hidden');
+  document.getElementById('startup-overlay')?.classList.remove('hidden');
+  setStartupProgress(0, 'Retrying setup…');
+  try {
+    await api('/api/setup/retry', { method: 'POST', body: '{}' });
+  } catch (_) {}
+  await pollSetupStatus();
+  loadHealthStatus();
+  loadBounties();
 });
 
 window.generatePatch = async (id) => {
@@ -323,10 +420,11 @@ window.submitPatch = async (id) => {
   const ready = await waitForBackendReady();
   if (ready) await initApi();
   if (!ready) return;
+  await pollSetupStatus();
   initUpdateBanner();
-  loadOllamaStatus();
+  loadHealthStatus();
   loadBounties();
-  setInterval(loadOllamaStatus, 30000);
+  setInterval(loadHealthStatus, 30000);
 })();
 
 function initUpdateBanner() {

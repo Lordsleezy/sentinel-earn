@@ -1,6 +1,6 @@
 {
   "name": "sentinel-earn",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "Standalone bounty hunting desktop app — GitHub + HackerOne + Ollama patches",
   "main": "main.js",
   "author": "Lordsleezy",

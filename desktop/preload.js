@@ -4,6 +4,7 @@ contextBridge.exposeInMainWorld('sentinelEarn', {
   getApiBase: () => ipcRenderer.invoke('get-api-base'),
   getBackendStatus: () => ipcRenderer.invoke('earn:getBackendStatus'),
   openPythonDownload: () => ipcRenderer.invoke('earn:openPythonDownload'),
+  openExternal: (url) => ipcRenderer.invoke('earn:openExternal', url),
   onBackendStatus: (callback) => {
     const handler = (_event, status) => callback(status);
     ipcRenderer.on('earn:backend-status', handler);

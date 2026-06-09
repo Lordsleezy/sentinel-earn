@@ -145,6 +145,7 @@ function createWindow() {
     backgroundColor: '#0a0e14',
     title: 'Sentinel Earn',
     autoHideMenuBar: true,
+    show: false,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -152,14 +153,16 @@ function createWindow() {
     },
   });
   mainWindow.loadFile('index.html');
-  mainWindow.webContents.once('did-finish-load', () => emitBackendStatus());
+  mainWindow.webContents.once('did-finish-load', () => {
+    emitBackendStatus();
+    mainWindow.show();
+  });
   mainWindow.on('closed', () => {
     mainWindow = null;
   });
 }
 
 app.whenReady().then(async () => {
-  createWindow();
   backendPort = await pickBackendPort(backendPort);
   API = `http://127.0.0.1:${backendPort}`;
 
@@ -168,8 +171,10 @@ app.whenReady().then(async () => {
     backendStatus = ok
       ? { state: 'ready', port: backendPort, api: API }
       : { state: 'error', code: 'timeout', message: 'Backend did not start in time' };
-    emitBackendStatus();
   }
+
+  createWindow();
+  emitBackendStatus();
 
   initAutoUpdater(() => mainWindow, {
     isDev: !app.isPackaged || process.env.NODE_ENV === 'development',
@@ -186,5 +191,10 @@ app.on('window-all-closed', () => {
 ipcMain.handle('get-api-base', () => API);
 ipcMain.handle('earn:getBackendStatus', () => backendStatus);
 ipcMain.handle('earn:openPythonDownload', () => shell.openExternal('https://www.python.org/downloads/'));
+ipcMain.handle('earn:openExternal', (_e, url) => {
+  if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+    shell.openExternal(url);
+  }
+});
 ipcMain.handle('earn:getUpdateStatus', () => getUpdateStatus());
 ipcMain.handle('earn:restartToUpdate', () => restartToUpdate());

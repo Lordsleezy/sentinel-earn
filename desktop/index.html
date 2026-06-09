@@ -9,7 +9,19 @@
 <body>
   <div id="startup-overlay" class="startup-overlay">
     <span class="orb large"></span>
-    <p id="startup-message">Starting Sentinel Earn engine…</p>
+    <p id="startup-message">Setting up Sentinel Earn engine…</p>
+    <div class="setup-progress-wrap">
+      <div class="setup-progress-bar"><div id="setup-progress-fill" class="setup-progress-fill"></div></div>
+      <p id="setup-progress-detail" class="setup-progress-detail"></p>
+    </div>
+  </div>
+  <div id="setup-error" class="startup-overlay hidden" role="alert">
+    <h2>Setup needs attention</h2>
+    <p id="setup-error-message"></p>
+    <div class="setup-error-actions">
+      <button type="button" id="setup-retry-btn" class="btn primary">Retry setup</button>
+      <button type="button" id="setup-ollama-btn" class="btn ghost hidden">Download Ollama</button>
+    </div>
   </div>
   <div id="python-error" class="startup-overlay hidden" role="alert">
     <h2>Python required</h2>
@@ -38,7 +50,10 @@
       <button class="tab" data-tab="earnings">Earnings</button>
       <button class="tab" data-tab="settings">Settings</button>
     </nav>
-    <div class="status-pill" id="ollama-status">Ollama: checking…</div>
+    <div class="status-group">
+      <div class="status-pill" id="backend-status">Backend: starting…</div>
+      <div class="status-pill" id="ollama-status">Ollama: checking…</div>
+    </div>
   </header>
 
   <main>
