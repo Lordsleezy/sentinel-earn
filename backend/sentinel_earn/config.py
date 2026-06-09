@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
 DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:3b"
@@ -84,6 +84,14 @@ def _sync_env(settings: Dict[str, Any]) -> None:
         val = settings.get(key, "")
         if val:
             os.environ[env_key] = str(val)
+
+
+def github_token_configured(settings: Optional[Dict[str, Any]] = None) -> bool:
+    """True when a GitHub token is saved in settings or present in the environment."""
+    s = settings if settings is not None else load_settings()
+    if (s.get("github_token") or "").strip():
+        return True
+    return bool(os.getenv("GITHUB_TOKEN", "").strip())
 
 
 def apply_settings() -> Dict[str, Any]:

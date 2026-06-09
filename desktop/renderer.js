@@ -309,9 +309,15 @@ async function hasGithubToken() {
   try {
     const s = await api('/api/settings');
     return Boolean(s.github_token_set);
-  } catch {
+  } catch (e) {
+    console.warn('github token check failed:', e);
     return false;
   }
+}
+
+function showGithubTokenPrompt(show) {
+  const prompt = document.getElementById('github-token-prompt');
+  if (prompt) prompt.classList.toggle('hidden', !show);
 }
 
 async function loadBounties() {
@@ -323,7 +329,7 @@ async function loadBounties() {
 
   if (!tokenOk) {
     document.getElementById('github-list').innerHTML =
-      '<div class="empty">Configure GitHub in Settings to scan for bounty issues.</div>';
+      '<div class="empty">No bounties loaded yet — add your GitHub token to scan.</div>';
     return;
   }
 
@@ -439,32 +445,62 @@ async function loadSettings() {
     if (form[k]) form[k].value = s[k] || '';
   });
   if (form.auto_generate_patches) form.auto_generate_patches.checked = !!s.auto_generate_patches;
+  if (form.github_token) {
+    form.github_token.value = '';
+    form.github_token.placeholder = s.github_token_set ? 'Token saved (leave blank to keep)' : 'ghp_…';
+  }
+  if (form.hackerone_api_token) {
+    form.hackerone_api_token.value = '';
+    form.hackerone_api_token.placeholder = s.hackerone_api_token ? 'Token saved (leave blank to keep)' : '';
+  }
 }
 
 document.getElementById('scan-github').onclick = async () => {
-  if (!(await hasGithubToken())) {
-    toast('Add your GitHub token in Settings first');
-    document.querySelector('.tab[data-tab="settings"]')?.click();
+  const tokenOk = await hasGithubToken();
+  showGithubTokenPrompt(!tokenOk);
+  if (!tokenOk) {
+    toast('Add your GitHub token in Settings to start scanning');
     return;
   }
   toast('Scanning GitHub…');
-  const d = await api('/api/bounties/scan/github', { method: 'POST', body: '{}' });
-  toast(`Found ${d.found} issues, queued ${d.queued}`);
-  loadBounties();
+  try {
+    const d = await api('/api/bounties/scan/github', { method: 'POST', body: '{}' });
+    toast(`Found ${d.found} issues, queued ${d.queued}`);
+    await loadBounties();
+  } catch (e) {
+    toast(`GitHub scan failed: ${e.message}`);
+  }
 };
 
 document.getElementById('scan-hackerone').onclick = async () => {
   toast('Scanning HackerOne programs…');
-  const d = await api('/api/bounties/scan/hackerone', { method: 'POST', body: JSON.stringify({ force_refresh: true }) });
-  renderH1(d.programs || []);
-  toast(`Loaded ${(d.programs || []).length} programs`);
+  try {
+    const d = await api('/api/bounties/scan/hackerone', {
+      method: 'POST',
+      body: JSON.stringify({ force_refresh: true }),
+    });
+    renderH1(d.programs || []);
+    toast(`Loaded ${(d.programs || []).length} programs`);
+  } catch (e) {
+    toast(`HackerOne scan failed: ${e.message}`);
+  }
 };
 
 document.getElementById('run-cycle').onclick = async () => {
+  const tokenOk = await hasGithubToken();
+  showGithubTokenPrompt(!tokenOk);
   toast('Running pipeline cycle…');
-  await api('/api/pipeline/cycle', { method: 'POST', body: '{}' });
-  toast('Cycle complete');
-  loadBounties();
+  try {
+    const d = await api('/api/pipeline/cycle', { method: 'POST', body: '{}' });
+    if (d.hackerone?.programs) renderH1(d.hackerone.programs);
+    const gh = d.github || {};
+    const h1n = d.hackerone_count ?? (d.hackerone?.programs || []).length ?? 0;
+    toast(`Cycle complete — ${gh.found ?? 0} GitHub issues, ${h1n} HackerOne programs`);
+    if (tokenOk) await loadBounties();
+    else toast('GitHub portion skipped — token not configured');
+  } catch (e) {
+    toast(`Pipeline cycle failed: ${e.message}`);
+  }
 };
 
 document.getElementById('refresh-patches').onclick = () => loadPatches();

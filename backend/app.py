@@ -8,7 +8,7 @@ import os
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 
-from sentinel_earn.config import apply_settings, load_settings, save_settings
+from sentinel_earn.config import apply_settings, github_token_configured, load_settings, save_settings
 from sentinel_earn import db
 from sentinel_earn.setup_engine import get_setup_engine
 from sentinel_earn import ollama_runtime
@@ -112,7 +112,8 @@ def settings():
             **s,
             "github_token": "***" if s.get("github_token") else "",
             "hackerone_api_token": "***" if s.get("hackerone_api_token") else "",
-            "github_token_set": bool((s.get("github_token") or "").strip()),
+            "hackerone_token_set": bool((s.get("hackerone_api_token") or "").strip()),
+            "github_token_set": github_token_configured(s),
         }
         return jsonify(safe)
     body = request.json or {}

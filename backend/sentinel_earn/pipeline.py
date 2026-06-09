@@ -41,6 +41,7 @@ def run_full_cycle() -> Dict[str, Any]:
     cycle = github_scanner.run_pipeline_cycle()
     return {
         "github": github,
+        "hackerone": hackerone,
         "hackerone_count": len(hackerone.get("programs", [])),
         "pipeline": cycle,
         "status": github_scanner.get_pipeline_status(),
