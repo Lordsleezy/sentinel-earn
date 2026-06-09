@@ -3,13 +3,54 @@
   "version": "1.0.0",
   "description": "Standalone bounty hunting desktop app — GitHub + HackerOne + Ollama patches",
   "main": "main.js",
+  "author": "Lordsleezy",
+  "license": "MIT",
   "scripts": {
     "start": "electron .",
+    "dist": "electron-builder --win nsis --x64 --publish never",
     "backend": "cd ../backend && python app.py"
   },
-  "author": "Sentinel Prime Inc.",
-  "license": "MIT",
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
   "devDependencies": {
-    "electron": "^28.3.3"
+    "electron": "^28.3.3",
+    "electron-builder": "^25.1.8"
+  },
+  "build": {
+    "appId": "com.lordsleezy.sentinel-earn",
+    "productName": "Sentinel Earn",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "**/*",
+      "!release/**"
+    ],
+    "extraResources": [
+      {
+        "from": "../backend",
+        "to": "backend",
+        "filter": [
+          "**/*",
+          "!.pytest_cache/**",
+          "!**/__pycache__/**",
+          "!.venv/Lib/site-packages/**/tests/**"
+        ]
+      }
+    ],
+    "win": {
+      "target": ["nsis"]
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "SentinelEarn-Setup-${version}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "Lordsleezy",
+      "repo": "sentinel-earn"
+    }
   }
 }

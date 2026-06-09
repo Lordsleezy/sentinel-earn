@@ -2,16 +2,25 @@ const { app, BrowserWindow, ipcMain } = require('electron');
 const path = require('path');
 const { spawn } = require('child_process');
 const http = require('http');
+const { initAutoUpdater, getUpdateStatus, restartToUpdate } = require('./updater');
 
 const BACKEND_PORT = process.env.SENTINEL_EARN_PORT || '5120';
 const API = `http://127.0.0.1:${BACKEND_PORT}`;
 let backendProc = null;
 let mainWindow = null;
 
+function getBackendRoot() {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'backend');
+  }
+  return path.join(__dirname, '..', 'backend');
+}
+
 function findPython() {
+  const backendRoot = getBackendRoot();
   const candidates = [
-    path.join(__dirname, '..', 'backend', '.venv', 'Scripts', 'python.exe'),
-    path.join(__dirname, '..', 'backend', 'venv', 'Scripts', 'python.exe'),
+    path.join(backendRoot, '.venv', 'Scripts', 'python.exe'),
+    path.join(backendRoot, 'venv', 'Scripts', 'python.exe'),
     'python',
   ];
   for (const c of candidates) {
@@ -42,9 +51,10 @@ async function waitForBackend(maxAttempts = 60) {
 
 function startBackend() {
   const python = findPython();
-  const script = path.join(__dirname, '..', 'backend', 'app.py');
+  const backendRoot = getBackendRoot();
+  const script = path.join(backendRoot, 'app.py');
   backendProc = spawn(python, [script], {
-    cwd: path.join(__dirname, '..', 'backend'),
+    cwd: backendRoot,
     env: { ...process.env, SENTINEL_EARN_PORT: BACKEND_PORT },
     stdio: ['ignore', 'pipe', 'pipe'],
   });
@@ -60,6 +70,7 @@ function createWindow() {
     minHeight: 640,
     backgroundColor: '#0a0e14',
     title: 'Sentinel Earn',
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
@@ -67,6 +78,7 @@ function createWindow() {
     },
   });
   mainWindow.loadFile('index.html');
+  mainWindow.on('closed', () => { mainWindow = null; });
 }
 
 app.whenReady().then(async () => {
@@ -74,6 +86,9 @@ app.whenReady().then(async () => {
   const ok = await waitForBackend();
   if (!ok) console.warn('Backend did not respond in time — UI may retry');
   createWindow();
+  initAutoUpdater(() => mainWindow, {
+    isDev: !app.isPackaged || process.env.NODE_ENV === 'development',
+  });
 });
 
 app.on('window-all-closed', () => {
@@ -82,3 +97,5 @@ app.on('window-all-closed', () => {
 });
 
 ipcMain.handle('get-api-base', () => API);
+ipcMain.handle('earn:getUpdateStatus', () => getUpdateStatus());
+ipcMain.handle('earn:restartToUpdate', () => restartToUpdate());

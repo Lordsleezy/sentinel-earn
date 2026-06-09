@@ -170,3 +170,18 @@ h2 { font-size: 0.95rem; color: var(--muted); margin: 0 0 10px; text-transform: 
 .toast.hidden { display: none; }
 
 .empty { color: var(--muted); font-style: italic; padding: 24px; text-align: center; }
+
+.update-banner {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding: 10px 24px;
+  background: linear-gradient(90deg, rgba(0, 212, 170, 0.18), rgba(0, 168, 132, 0.08));
+  border-bottom: 1px solid var(--teal-dim);
+  color: var(--teal);
+  font-size: 0.88rem;
+}
+.update-banner.hidden { display: none; }
+.update-banner-actions { display: flex; gap: 8px; }

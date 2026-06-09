@@ -17,3 +17,4 @@ workspace/
 .DS_Store
 Thumbs.db
 desktop/out/
+desktop/release/

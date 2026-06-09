@@ -7,6 +7,13 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <div id="update-banner" class="update-banner hidden" role="status">
+    <span id="update-banner-text">Update available — restart to install</span>
+    <div class="update-banner-actions">
+      <button type="button" id="update-restart-btn" class="btn small primary">Restart now</button>
+      <button type="button" id="update-later-btn" class="btn small ghost">Later</button>
+    </div>
+  </div>
   <header class="topbar">
     <div class="brand">
       <span class="orb"></span>

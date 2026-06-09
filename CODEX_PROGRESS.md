@@ -48,6 +48,7 @@ Extracted from `Lordsleezy/SentinelAI` into a fully independent product at `Lord
 
 - [x] GitHub scanner tests pass
 - [x] HackerOne parser tests pass
-- [x] No SentinelAI import paths remain in ported modules
-- [x] README + setup documented
-- [x] Electron UI: bounties, patches, history, earnings, settings
+- [x] electron-updater with teal banner (Shield pattern)
+- [x] electron-builder NSIS + GitHub Releases + latest.yml
+- [x] CI: pytest → build → release artifact
+- [x] Scheduled scan workflow (every 6h → scan-log/)

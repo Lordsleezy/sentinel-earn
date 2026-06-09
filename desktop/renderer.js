@@ -222,7 +222,37 @@ window.submitPatch = async (id) => {
 
 (async () => {
   await initApi();
+  initUpdateBanner();
   loadOllamaStatus();
   loadBounties();
   setInterval(loadOllamaStatus, 30000);
 })();
+
+function initUpdateBanner() {
+  const banner = document.getElementById('update-banner');
+  const textEl = document.getElementById('update-banner-text');
+  const restartBtn = document.getElementById('update-restart-btn');
+  const laterBtn = document.getElementById('update-later-btn');
+  if (!banner || !window.sentinelEarn?.onUpdate) return;
+
+  let dismissed = false;
+
+  function render(status) {
+    if (dismissed || !status || status.state !== 'ready') {
+      banner.classList.add('hidden');
+      return;
+    }
+    banner.classList.remove('hidden');
+    textEl.textContent = status.version
+      ? `Update available — restart to install (v${status.version})`
+      : 'Update available — restart to install';
+  }
+
+  window.sentinelEarn.getUpdateStatus().then(render).catch(() => undefined);
+  window.sentinelEarn.onUpdate(render);
+  restartBtn?.addEventListener('click', () => window.sentinelEarn.restartToUpdate());
+  laterBtn?.addEventListener('click', () => {
+    dismissed = true;
+    banner.classList.add('hidden');
+  });
+}
