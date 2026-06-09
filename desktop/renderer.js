@@ -1,4 +1,5 @@
 let API = 'http://127.0.0.1:5120';
+let backendReady = false;
 
 async function initApi() {
   if (window.sentinelEarn) {
@@ -6,7 +7,60 @@ async function initApi() {
   }
 }
 
+async function waitForBackendReady() {
+  const overlay = document.getElementById('startup-overlay');
+  const msg = document.getElementById('startup-message');
+  const pyErr = document.getElementById('python-error');
+
+  if (!window.sentinelEarn?.onBackendStatus) {
+    backendReady = true;
+    overlay?.classList.add('hidden');
+    return true;
+  }
+
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (status) => {
+      if (done) return;
+      if (status?.state === 'error' && status.code === 'python_missing') {
+        done = true;
+        overlay?.classList.add('hidden');
+        pyErr?.classList.remove('hidden');
+        resolve(false);
+        return;
+      }
+      if (status?.state === 'ready') {
+        done = true;
+        backendReady = true;
+        overlay?.classList.add('hidden');
+        if (status.api) API = status.api;
+        resolve(true);
+        return;
+      }
+      if (status?.state === 'starting' && msg) {
+        msg.textContent = 'Starting Sentinel Earn engine…';
+      }
+      if (status?.state === 'error') {
+        done = true;
+        overlay?.classList.add('hidden');
+        if (msg) {
+          msg.textContent = status.message || 'Backend failed to start';
+          overlay?.classList.remove('hidden');
+        }
+        resolve(false);
+      }
+    };
+
+    window.sentinelEarn.getBackendStatus().then(finish);
+    window.sentinelEarn.onBackendStatus((status) => {
+      finish(status);
+      if (status?.state === 'ready' && status.api) API = status.api;
+    });
+  });
+}
+
 async function api(path, opts = {}) {
+  if (!backendReady) throw new Error('Backend starting…');
   const res = await fetch(`${API}${path}`, {
     headers: { 'Content-Type': 'application/json', ...(opts.headers || {}) },
     ...opts,
@@ -50,6 +104,11 @@ function refreshCurrentPanel(tab) {
 
 async function loadOllamaStatus() {
   const el = document.getElementById('ollama-status');
+  if (!backendReady) {
+    el.textContent = 'Starting engine…';
+    el.className = 'status-pill';
+    return;
+  }
   try {
     const d = await api('/api/ollama/status');
     el.textContent = d.online ? `Ollama: online (${d.models?.length || 0} models)` : 'Ollama: offline';
@@ -60,12 +119,39 @@ async function loadOllamaStatus() {
   }
 }
 
+async function hasGithubToken() {
+  try {
+    const s = await api('/api/settings');
+    return Boolean(s.github_token_set);
+  } catch {
+    return false;
+  }
+}
+
 async function loadBounties() {
+  const prompt = document.getElementById('github-token-prompt');
+  if (!backendReady) return;
+
+  const tokenOk = await hasGithubToken();
+  if (prompt) prompt.classList.toggle('hidden', tokenOk);
+
+  if (!tokenOk) {
+    document.getElementById('github-list').innerHTML =
+      '<div class="empty">Configure GitHub in Settings to scan for bounty issues.</div>';
+    return;
+  }
+
   try {
     const d = await api('/api/dashboard');
     renderGithub(d.opportunities || []);
   } catch (e) {
-    document.getElementById('github-list').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    const msg = String(e.message || '');
+    if (msg.includes('fetch') || msg.includes('Failed to fetch')) {
+      document.getElementById('github-list').innerHTML =
+        '<div class="empty">Cannot reach backend — retrying…</div>';
+    } else {
+      document.getElementById('github-list').innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+    }
   }
 }
 
@@ -170,6 +256,11 @@ async function loadSettings() {
 }
 
 document.getElementById('scan-github').onclick = async () => {
+  if (!(await hasGithubToken())) {
+    toast('Add your GitHub token in Settings first');
+    document.querySelector('.tab[data-tab="settings"]')?.click();
+    return;
+  }
   toast('Scanning GitHub…');
   const d = await api('/api/bounties/scan/github', { method: 'POST', body: '{}' });
   toast(`Found ${d.found} issues, queued ${d.queued}`);
@@ -200,7 +291,12 @@ document.getElementById('settings-form').onsubmit = async (e) => {
   await api('/api/settings', { method: 'POST', body: JSON.stringify(body) });
   toast('Settings saved');
   loadOllamaStatus();
+  loadBounties();
 };
+
+document.getElementById('goto-settings-token')?.addEventListener('click', () => {
+  document.querySelector('.tab[data-tab="settings"]')?.click();
+});
 
 window.generatePatch = async (id) => {
   toast('Generating patch via Ollama — this may take several minutes…');
@@ -221,7 +317,12 @@ window.submitPatch = async (id) => {
 };
 
 (async () => {
-  await initApi();
+  document.getElementById('python-download-btn')?.addEventListener('click', () => {
+    window.sentinelEarn?.openPythonDownload();
+  });
+  const ready = await waitForBackendReady();
+  if (ready) await initApi();
+  if (!ready) return;
   initUpdateBanner();
   loadOllamaStatus();
   loadBounties();

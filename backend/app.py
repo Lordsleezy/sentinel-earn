@@ -35,7 +35,8 @@ start_background_worker(interval_sec=45)
 
 @app.route("/api/ping")
 def ping():
-    return jsonify({"status": "ok", "app": "Sentinel Earn"})
+    port = int(os.getenv("SENTINEL_EARN_PORT", "5120"))
+    return jsonify({"status": "ok", "app": "Sentinel Earn", "port": port})
 
 
 @app.route("/api/dashboard")
@@ -104,7 +105,12 @@ def earnings():
 def settings():
     if request.method == "GET":
         s = load_settings()
-        safe = {**s, "github_token": "***" if s.get("github_token") else "", "hackerone_api_token": "***" if s.get("hackerone_api_token") else ""}
+        safe = {
+            **s,
+            "github_token": "***" if s.get("github_token") else "",
+            "hackerone_api_token": "***" if s.get("hackerone_api_token") else "",
+            "github_token_set": bool((s.get("github_token") or "").strip()),
+        }
         return jsonify(safe)
     body = request.json or {}
     current = load_settings()

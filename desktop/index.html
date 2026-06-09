@@ -7,6 +7,15 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
+  <div id="startup-overlay" class="startup-overlay">
+    <span class="orb large"></span>
+    <p id="startup-message">Starting Sentinel Earn engine…</p>
+  </div>
+  <div id="python-error" class="startup-overlay hidden" role="alert">
+    <h2>Python required</h2>
+    <p>Sentinel Earn requires Python 3.10 or newer. Click below to download it.</p>
+    <button type="button" id="python-download-btn" class="btn primary">Download Python</button>
+  </div>
   <div id="update-banner" class="update-banner hidden" role="status">
     <span id="update-banner-text">Update available — restart to install</span>
     <div class="update-banner-actions">
@@ -34,6 +43,9 @@
 
   <main>
     <section id="panel-bounties" class="panel active">
+      <div id="github-token-prompt" class="info-banner hidden">
+        Add your GitHub token in <button type="button" class="link-btn" id="goto-settings-token">Settings</button> to start scanning for bounties.
+      </div>
       <div class="toolbar">
         <button id="scan-github" class="btn primary">Scan GitHub Bounties</button>
         <button id="scan-hackerone" class="btn">Scan HackerOne Programs</button>
