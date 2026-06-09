@@ -90,10 +90,36 @@ def _probe_nvidia_gpu() -> Optional[Dict[str, Any]]:
     return None
 
 
+_INTEGRATED_GPU_PATTERNS = re.compile(
+    r"intel|uhd|iris|hd graphics|adreno|qualcomm|snapdragon|microsoft basic|"
+    r"remote display|virtual display|parsec|vmware|citrix|standard vga|"
+    r"radeon\(tm\) graphics$|amd radeon graphics$",
+    re.I,
+)
+
+
+def is_discrete_gpu(gpu_name: str, vendor: str = "", source: str = "") -> bool:
+    """True only for a real discrete GPU suitable for large model inference."""
+    if source == "nvidia-smi":
+        return True
+    name = (gpu_name or "").strip()
+    if not name or name.lower() in ("cpu only", "cpu inference"):
+        return False
+    if _INTEGRATED_GPU_PATTERNS.search(name):
+        return False
+    upper = name.upper()
+    if vendor == "NVIDIA" or "GEFORCE" in upper or "RTX" in upper or "GTX" in upper or "QUADRO" in upper:
+        return True
+    if vendor == "AMD" and re.search(r"\bRX\s*\d|RADEON\s*RX|RADEON\s*PRO", upper):
+        return True
+    return False
+
+
 def _probe_gpus_windows() -> List[Dict[str, Any]]:
     gpus: List[Dict[str, Any]] = []
     nvidia = _probe_nvidia_gpu()
     if nvidia:
+        nvidia["discrete"] = True
         gpus.append(nvidia)
 
     ps_script = (
@@ -140,6 +166,7 @@ def _probe_gpus_windows() -> List[Dict[str, Any]]:
                 "vram_gb": vram_gb,
                 "vendor": vendor,
                 "source": "win32_videocontroller",
+                "discrete": is_discrete_gpu(name, vendor, "win32_videocontroller"),
             })
     except Exception:
         pass
@@ -153,25 +180,33 @@ def _probe_gpu() -> Dict[str, Any]:
         gpus = []
         nvidia = _probe_nvidia_gpu()
         if nvidia:
+            nvidia["discrete"] = True
             gpus.append(nvidia)
 
-    if not gpus:
+    discrete_gpus = [g for g in gpus if g.get("discrete")]
+
+    if not discrete_gpus:
+        display = gpus[0] if gpus else None
         return {
-            "gpu_name": "CPU only",
+            "gpu_name": display.get("gpu_name", "CPU only") if display else "CPU only",
             "vram_gb": 0.0,
-            "vendor": "None",
-            "source": "cpu_fallback",
+            "discrete_vram_gb": 0.0,
+            "vendor": display.get("vendor", "None") if display else "None",
+            "source": display.get("source", "cpu_fallback") if display else "cpu_fallback",
             "cpu_only": True,
-            "gpus": [],
+            "has_discrete_gpu": False,
+            "gpus": gpus,
         }
 
-    best = max(gpus, key=lambda g: float(g.get("vram_gb") or 0))
+    best = max(discrete_gpus, key=lambda g: float(g.get("vram_gb") or 0))
     return {
         "gpu_name": best.get("gpu_name", "GPU"),
         "vram_gb": float(best.get("vram_gb") or 0),
+        "discrete_vram_gb": float(best.get("vram_gb") or 0),
         "vendor": best.get("vendor", "Unknown"),
         "source": best.get("source", "unknown"),
         "cpu_only": False,
+        "has_discrete_gpu": True,
         "gpus": gpus,
     }
 
@@ -237,38 +272,45 @@ def _probe_ollama_running(host: str = "http://127.0.0.1:11434") -> bool:
 
 def recommend_earn_model(
     ram_gb: float,
-    vram_gb: float,
+    discrete_vram_gb: float,
     *,
+    has_discrete_gpu: bool = False,
     cpu_only: bool = False,
     npu_present: bool = False,
 ) -> Dict[str, Any]:
-    """Tiered model selection based on RAM, VRAM, CPU-only, and NPU."""
-    if ram_gb < 8.0:
-        model = EARN_MODEL_1_5B
-        reason = f"Your system has {ram_gb}GB RAM — we use the lightest model for stability."
-        tier = "minimal"
-    elif npu_present:
-        model = EARN_MODEL_3B
-        reason = "Your NPU-equipped device runs best with the compact 3B model optimized for efficiency."
-        tier = "balanced"
-    elif vram_gb >= 16.0:
-        model = EARN_MODEL_14B
-        reason = f"Your {vram_gb}GB VRAM GPU can run the largest coder model for best patch quality."
-        tier = "ultra"
-    elif vram_gb >= 8.0:
-        model = EARN_MODEL_7B
-        reason = f"Your {vram_gb}GB VRAM GPU is a great fit for the balanced 7B coder model."
-        tier = "high"
-    elif vram_gb >= 4.0 or cpu_only:
-        model = EARN_MODEL_3B
-        if cpu_only:
-            reason = "No discrete GPU detected — the 3B model is optimized for CPU inference."
+    """Tiered model selection — 7B/14B only with a real discrete GPU."""
+    if not has_discrete_gpu or cpu_only:
+        if ram_gb < 16.0:
+            model = EARN_MODEL_1_5B
+            reason = (
+                f"No discrete GPU detected ({ram_gb}GB RAM) — "
+                f"the 1.5B model runs reliably on CPU."
+            )
+            tier = "minimal"
         else:
-            reason = f"Your {vram_gb}GB VRAM GPU works well with the efficient 3B coder model."
-        tier = "balanced"
+            model = EARN_MODEL_3B
+            if npu_present:
+                reason = (
+                    "No discrete GPU — your NPU/CPU system runs best with the "
+                    "2GB 3B model for stable inference."
+                )
+            else:
+                reason = (
+                    f"No discrete GPU ({ram_gb}GB RAM) — "
+                    f"the 3B model is optimized for CPU inference."
+                )
+            tier = "balanced"
+    elif discrete_vram_gb >= 16.0:
+        model = EARN_MODEL_14B
+        reason = f"Your {discrete_vram_gb}GB VRAM GPU can run the largest coder model."
+        tier = "ultra"
+    elif discrete_vram_gb >= 8.0:
+        model = EARN_MODEL_7B
+        reason = f"Your {discrete_vram_gb}GB VRAM GPU is a great fit for the 7B coder model."
+        tier = "high"
     else:
         model = EARN_MODEL_3B
-        reason = "Based on your hardware we recommend the efficient 3B model."
+        reason = f"Your GPU has {discrete_vram_gb}GB VRAM — the efficient 3B model is recommended."
         tier = "balanced"
 
     return {
@@ -277,8 +319,10 @@ def recommend_earn_model(
         "reason": reason,
         "explanation": f"Based on your hardware we recommend {model} — optimized for your device.",
         "ram_gb": ram_gb,
-        "vram_gb": vram_gb,
-        "cpu_only": cpu_only,
+        "vram_gb": discrete_vram_gb,
+        "discrete_vram_gb": discrete_vram_gb,
+        "has_discrete_gpu": has_discrete_gpu,
+        "cpu_only": cpu_only or not has_discrete_gpu,
         "npu_present": npu_present,
     }
 
@@ -295,8 +339,8 @@ def format_hardware_summary(profile: Dict[str, Any]) -> Dict[str, str]:
     gpu_line = f"{gpu}"
     if vram and float(vram) > 0:
         gpu_line += f" ({vram}GB VRAM)"
-    elif profile.get("cpu_only"):
-        gpu_line = "No discrete GPU — CPU inference"
+    elif profile.get("cpu_only") or not profile.get("has_discrete_gpu"):
+        gpu_line = "No discrete GPU — CPU / NPU inference"
 
     npu_line = None
     if profile.get("npu_present"):
@@ -335,7 +379,8 @@ def probe_machine_profile(ollama_host: str = "http://127.0.0.1:11434") -> Dict[s
 
     rec = recommend_earn_model(
         ram_gb,
-        float(gpu.get("vram_gb") or 0),
+        float(gpu.get("discrete_vram_gb") or 0),
+        has_discrete_gpu=bool(gpu.get("has_discrete_gpu")),
         cpu_only=bool(gpu.get("cpu_only")),
         npu_present=bool(npu.get("npu_present")),
     )
@@ -345,7 +390,9 @@ def probe_machine_profile(ollama_host: str = "http://127.0.0.1:11434") -> Dict[s
         "cpu_name": _probe_cpu_name(),
         "cpu_cores": cpu_cores,
         "ram_gb": ram_gb,
-        "vram_gb": gpu.get("vram_gb", 0.0),
+        "vram_gb": gpu.get("discrete_vram_gb", 0.0),
+        "discrete_vram_gb": gpu.get("discrete_vram_gb", 0.0),
+        "has_discrete_gpu": gpu.get("has_discrete_gpu", False),
         "gpu_name": gpu.get("gpu_name", "CPU only"),
         "gpu_vendor": gpu.get("vendor", "None"),
         "gpu_probe_source": gpu.get("source", "unknown"),

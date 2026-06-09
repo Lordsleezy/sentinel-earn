@@ -86,7 +86,12 @@ function applySetupState(d) {
   if (d.phase === 'error' || d.error) {
     e.screen?.classList.add('hidden');
     e.error?.classList.remove('hidden');
-    document.getElementById('setup-error-message').textContent = d.error || d.message || 'Setup failed.';
+    const errEl = document.getElementById('setup-error-message');
+    const parts = [d.error || d.message, d.error_detail].filter(Boolean);
+    const unique = [...new Set(parts)];
+    if (errEl) {
+      errEl.textContent = unique.join('\n\n') || 'Setup failed.';
+    }
     return 'error';
   }
 

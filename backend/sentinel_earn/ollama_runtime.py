@@ -5,19 +5,22 @@ import json
 import logging
 import os
 import platform
+import queue
 import re
 import shutil
 import subprocess
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from sentinel_earn.config import get_data_dir, load_settings
 
 logger = logging.getLogger("sentinel_earn.ollama")
 
 OLLAMA_WIN_INSTALLER = "https://ollama.com/download/OllamaSetup.exe"
+PULL_TIMEOUT_SEC = 30 * 60  # 30 minutes
 
 # Approximate model sizes for progress when total unknown (GB)
 MODEL_SIZE_GB = {
@@ -65,6 +68,45 @@ def clear_ready() -> None:
     path = _runtime_dir() / "ready.json"
     if path.is_file():
         path.unlink(missing_ok=True)
+
+
+def _pull_state_path() -> Path:
+    return _runtime_dir() / "pull_state.json"
+
+
+def load_pull_state() -> Dict[str, Any]:
+    path = _pull_state_path()
+    if not path.is_file():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_pull_state(model: str, percent: int, **extra: Any) -> None:
+    payload = {
+        "model": model,
+        "percent": percent,
+        "updated_at": _utc(),
+        **extra,
+    }
+    _pull_state_path().write_text(json.dumps(payload, indent=2), encoding="utf-8")
+
+
+def clear_pull_state() -> None:
+    path = _pull_state_path()
+    if path.is_file():
+        path.unlink(missing_ok=True)
+
+
+def has_resumable_pull(model: str) -> bool:
+    state = load_pull_state()
+    if state.get("model") != model:
+        return False
+    if model_present(model):
+        return False
+    return int(state.get("percent") or 0) > 0
 
 
 def ollama_installed() -> bool:
@@ -270,6 +312,45 @@ def install_ollama(progress_cb: Optional[Callable[[Dict[str, Any]], None]] = Non
     return {"ok": False, "user_message": "Automatic Ollama install is supported on Windows. Tap Retry or reinstall the app."}
 
 
+def _format_pull_failure(
+    model_name: str,
+    *,
+    error_code: str,
+    returncode: Optional[int] = None,
+    last_lines: Optional[List[str]] = None,
+    exc: Optional[Exception] = None,
+) -> Dict[str, Any]:
+    detail_parts: List[str] = []
+    if returncode is not None:
+        detail_parts.append(f"Ollama exit code: {returncode}")
+    if last_lines:
+        detail_parts.extend(last_lines[-6:])
+    if exc is not None:
+        detail_parts.append(f"{type(exc).__name__}: {exc}")
+    detail = "\n".join(p for p in detail_parts if p).strip()
+
+    if error_code == "timeout":
+        user = (
+            f"Download of {model_name} exceeded 30 minutes and was stopped. "
+            "Tap Retry to resume from the last checkpoint."
+        )
+    elif error_code == "network":
+        user = f"Network error while downloading {model_name}. Check your connection and tap Retry."
+    elif detail:
+        user = f"Model download failed: {detail[:400]}"
+    else:
+        user = f"Model download failed for {model_name}. Tap Retry to resume."
+
+    return {
+        "ok": False,
+        "model": model_name,
+        "error_code": error_code,
+        "error_detail": detail or user,
+        "user_message": user,
+        "resumable": has_resumable_pull(model_name),
+    }
+
+
 def pull_model(
     model_name: str,
     progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
@@ -277,14 +358,37 @@ def pull_model(
     if not ollama_running():
         start = ensure_ollama_running()
         if not start.get("ok"):
-            return {"ok": False, "user_message": start.get("user_message", "Ollama is offline.")}
+            return {
+                "ok": False,
+                "error_code": "ollama_offline",
+                "error_detail": start.get("user_message", "Ollama is offline."),
+                "user_message": start.get("user_message", "Ollama is offline."),
+            }
 
     cli = _ollama_cli()
     if not cli:
-        return {"ok": False, "user_message": "Ollama CLI not found. Tap Retry to reinstall."}
+        return {
+            "ok": False,
+            "error_code": "cli_missing",
+            "error_detail": "ollama executable not found on PATH",
+            "user_message": "Ollama CLI not found. Tap Retry.",
+        }
 
+    resuming = has_resumable_pull(model_name)
     started_at = time.time()
+    deadline = started_at + PULL_TIMEOUT_SEC
     est_mb = MODEL_SIZE_GB.get(model_name, 3.0) * 1024
+    last_lines: List[str] = []
+    last_pct = int(load_pull_state().get("percent") or 0) if resuming else 0
+
+    if resuming and progress_cb:
+        progress_cb({
+            "phase": "pulling_model",
+            "percent": last_pct,
+            "model": model_name,
+            "message": f"Resuming download of {model_name}…",
+            "resuming": True,
+        })
 
     try:
         proc = subprocess.Popen(
@@ -295,26 +399,88 @@ def pull_model(
             bufsize=1,
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
-        last_pct = 0
-        for line in iter(proc.stdout.readline, ""):
-            line = line.strip()
+        line_queue: queue.Queue[str] = queue.Queue()
+
+        def _reader() -> None:
+            try:
+                for raw in iter(proc.stdout.readline, ""):
+                    line_queue.put(raw)
+            finally:
+                line_queue.put("")
+
+        threading.Thread(target=_reader, daemon=True).start()
+
+        while proc.poll() is None:
+            if time.time() > deadline:
+                proc.kill()
+                proc.wait(timeout=10)
+                save_pull_state(model_name, last_pct, error_code="timeout")
+                return _format_pull_failure(
+                    model_name,
+                    error_code="timeout",
+                    last_lines=last_lines,
+                )
+            try:
+                raw = line_queue.get(timeout=1.0)
+            except queue.Empty:
+                continue
+            line = raw.strip()
             if not line:
                 continue
+            last_lines.append(line)
+            if len(last_lines) > 20:
+                last_lines.pop(0)
+
+            lower = line.lower()
+            if "error" in lower or "failed" in lower or "timeout" in lower:
+                logger.warning("ollama pull: %s", line)
+
             parsed = _parse_pull_progress(line, model_name, started_at)
             last_pct = max(last_pct, int(parsed.get("percent") or 0))
             parsed["percent"] = last_pct
             parsed["phase"] = "pulling_model"
+            parsed["resuming"] = resuming
             if "total_mb" not in parsed:
                 parsed["total_mb"] = round(est_mb, 1)
+            save_pull_state(model_name, last_pct)
             if progress_cb:
                 progress_cb(parsed)
-        proc.wait(timeout=3600)
+
+        # Drain remaining lines after process exit
+        while True:
+            try:
+                raw = line_queue.get_nowait()
+            except queue.Empty:
+                break
+            line = raw.strip()
+            if line:
+                last_lines.append(line)
+
         ok = proc.returncode == 0
-        return {"ok": ok, "model": model_name, "user_message": "Model ready." if ok else "Model download failed. Tap Retry."}
-    except FileNotFoundError:
-        return {"ok": False, "user_message": "Ollama CLI not found. Tap Retry."}
+        if ok:
+            clear_pull_state()
+            return {"ok": True, "model": model_name, "user_message": "Model ready."}
+
+        err_code = "ollama_pull_failed"
+        joined = " ".join(last_lines).lower()
+        if "timeout" in joined or "deadline" in joined:
+            err_code = "timeout"
+        elif "connection" in joined or "network" in joined or "dial" in joined:
+            err_code = "network"
+
+        save_pull_state(model_name, last_pct, error_code=err_code, last_error=last_lines[-1] if last_lines else "")
+        return _format_pull_failure(
+            model_name,
+            error_code=err_code,
+            returncode=proc.returncode,
+            last_lines=last_lines,
+        )
+    except FileNotFoundError as e:
+        return _format_pull_failure(model_name, error_code="cli_missing", exc=e)
     except Exception as e:
-        return {"ok": False, "error": str(e)[:200], "user_message": "Model download failed. Tap Retry."}
+        logger.exception("pull_model failed")
+        save_pull_state(model_name, last_pct, error_code="exception", last_error=str(e))
+        return _format_pull_failure(model_name, error_code="exception", exc=e, last_lines=last_lines)
 
 
 def save_ready(model: str, profile: Dict[str, Any]) -> None:

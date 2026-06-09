@@ -30,6 +30,9 @@ def _empty_state() -> Dict[str, Any]:
         "total_mb": None,
         "eta_seconds": None,
         "awaiting_user": False,
+        "error_detail": None,
+        "error_code": None,
+        "resumable": False,
     }
 
 
@@ -180,12 +183,20 @@ class SetupEngine:
             )
 
             if not ollama_runtime.model_present(model):
+                resuming = ollama_runtime.has_resumable_pull(model)
+                self._set(
+                    message=f"Resuming download of {model}…" if resuming else f"Downloading {model}…",
+                )
+
                 def pull_cb(info: Dict[str, Any]) -> None:
                     pull_pct = int(info.get("percent") or 0)
+                    msg = info.get("message") or (
+                        f"Resuming download of {model}…" if info.get("resuming") else f"Downloading {model}…"
+                    )
                     self._set(
                         phase="pulling_model",
                         percent=min(40 + int(pull_pct * 0.55), 98),
-                        message=f"Downloading {model}…",
+                        message=msg,
                         model=model,
                         downloaded_mb=info.get("downloaded_mb"),
                         total_mb=info.get("total_mb"),
@@ -220,12 +231,17 @@ class SetupEngine:
                 self._running = False
 
     def _fail(self, result: Dict[str, Any]) -> None:
+        detail = result.get("error_detail") or result.get("error") or ""
+        summary = result.get("user_message") or detail or "Setup failed."
         self._set(
             phase="error",
             complete=False,
             awaiting_user=False,
-            error=result.get("user_message") or result.get("error") or "Setup failed.",
-            message=result.get("user_message") or "Setup failed. Tap Retry.",
+            error=summary,
+            error_detail=detail if detail != summary else None,
+            error_code=result.get("error_code"),
+            resumable=bool(result.get("resumable")),
+            message=summary,
         )
 
 

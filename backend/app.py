@@ -134,6 +134,7 @@ def setup_status():
     ready = ollama_runtime.load_ready()
     return jsonify({
         **setup,
+        "pull_resumable": ollama_runtime.has_resumable_pull(str(setup.get("model") or "")),
         "setup_complete": bool(setup.get("complete") or ollama_runtime.is_setup_complete()),
         "ollama_installed": ollama_runtime.ollama_installed(),
         "ollama_running": ollama_runtime.ollama_running(),

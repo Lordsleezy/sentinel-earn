@@ -133,6 +133,15 @@ body {
   min-height: 1.2em;
 }
 
+#setup-error-message {
+  white-space: pre-wrap;
+  max-width: 480px;
+  text-align: left;
+  font-size: 0.88rem;
+  line-height: 1.45;
+  color: var(--muted);
+}
+
 main { padding: 24px; max-width: 1400px; margin: 0 auto; }
 .panel { display: none; }
 .panel.active { display: block; }
