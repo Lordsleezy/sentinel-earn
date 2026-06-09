@@ -8,21 +8,120 @@ async function initApi() {
   }
 }
 
-function setStartupProgress(percent, detail) {
+const setupEls = () => ({
+  screen: document.getElementById('setup-screen'),
+  backendMsg: document.getElementById('setup-backend-msg'),
+  detecting: document.getElementById('setup-detecting'),
+  hardware: document.getElementById('setup-hardware-panel'),
+  progress: document.getElementById('setup-progress-panel'),
+  ready: document.getElementById('setup-ready-panel'),
+  error: document.getElementById('setup-error'),
+});
+
+function formatEta(seconds) {
+  if (seconds == null || seconds < 0) return '';
+  if (seconds < 60) return `${seconds}s remaining`;
+  const m = Math.floor(seconds / 60);
+  const s = seconds % 60;
+  return `${m}m ${s}s remaining`;
+}
+
+function showSetupPanel(panel) {
+  const e = setupEls();
+  [e.detecting, e.hardware, e.progress, e.ready].forEach((el) => el?.classList.add('hidden'));
+  panel?.classList.remove('hidden');
+}
+
+function renderHardwareSummary(d) {
+  const summary = d.hardware_summary || {};
+  const hw = d.hardware || {};
+  document.getElementById('hw-cpu').textContent = summary.cpu || hw.cpu_name || '—';
+  document.getElementById('hw-ram').textContent = summary.ram || `${hw.ram_gb || '?'} GB`;
+  document.getElementById('hw-gpu').textContent = summary.gpu || hw.gpu_name || 'CPU only';
+  const npuRow = document.getElementById('hw-npu-row');
+  const npuText = summary.npu || hw.npu_device;
+  if (npuRow) {
+    const show = Boolean(hw.npu_present && npuText);
+    npuRow.classList.toggle('hidden', !show);
+    if (show) document.getElementById('hw-npu').textContent = npuText;
+  }
+  const recText = d.recommendation_text || d.recommendation?.explanation || '';
+  const model = d.model || d.recommended_model || d.hardware?.recommended_model || '';
+  document.getElementById('setup-rec-text').textContent = recText;
+  document.getElementById('setup-model-name').textContent = model;
+}
+
+function renderDownloadProgress(d) {
+  const pct = Number(d.percent || 0);
   const fill = document.getElementById('setup-progress-fill');
-  const detailEl = document.getElementById('setup-progress-detail');
-  if (fill) fill.style.width = `${Math.max(0, Math.min(100, percent || 0))}%`;
-  if (detailEl && detail) detailEl.textContent = detail;
+  if (fill) fill.style.width = `${Math.max(0, Math.min(100, pct))}%`;
+
+  const model = d.model || '';
+  document.getElementById('setup-progress-model').textContent = model;
+
+  const dl = d.downloaded_mb;
+  const total = d.total_mb;
+  const stats = document.getElementById('setup-progress-stats');
+  if (stats) {
+    let line = `${pct}%`;
+    if (dl != null && total != null) line += ` · ${dl} MB / ${total} MB`;
+    else if (dl != null) line += ` · ${dl} MB downloaded`;
+    const eta = formatEta(d.eta_seconds);
+    if (eta) line += ` · ${eta}`;
+    stats.textContent = line;
+  }
+
+  const detail = document.getElementById('setup-progress-detail');
+  if (detail) {
+    if (d.phase === 'installing_ollama') detail.textContent = d.message || 'Installing Ollama runtime…';
+    else if (d.phase === 'pulling_model') detail.textContent = d.message || `Downloading ${model}…`;
+    else detail.textContent = d.message || '';
+  }
+}
+
+function applySetupState(d) {
+  const e = setupEls();
+  if (e.backendMsg) e.backendMsg.classList.add('hidden');
+
+  if (d.phase === 'error' || d.error) {
+    e.screen?.classList.add('hidden');
+    e.error?.classList.remove('hidden');
+    document.getElementById('setup-error-message').textContent = d.error || d.message || 'Setup failed.';
+    return 'error';
+  }
+
+  if (d.complete || d.setup_complete || d.phase === 'ready') {
+    setupComplete = true;
+    showSetupPanel(e.ready);
+    return 'ready';
+  }
+
+  if (d.phase === 'detecting' || d.phase === 'idle') {
+    showSetupPanel(e.detecting);
+    return 'detecting';
+  }
+
+  if (d.phase === 'awaiting_download' || d.awaiting_user) {
+    showSetupPanel(e.hardware);
+    renderHardwareSummary(d);
+    return 'awaiting';
+  }
+
+  if (['installing_ollama', 'starting_ollama', 'pulling_model'].includes(d.phase)) {
+    showSetupPanel(e.progress);
+    renderDownloadProgress(d);
+    return 'downloading';
+  }
+
+  return 'unknown';
 }
 
 async function waitForBackendReady() {
-  const overlay = document.getElementById('startup-overlay');
-  const msg = document.getElementById('startup-message');
+  const e = setupEls();
   const pyErr = document.getElementById('python-error');
 
   if (!window.sentinelEarn?.onBackendStatus) {
     backendReady = true;
-    overlay?.classList.add('hidden');
     return true;
   }
 
@@ -32,7 +131,7 @@ async function waitForBackendReady() {
       if (done) return;
       if (status?.state === 'error' && status.code === 'python_missing') {
         done = true;
-        overlay?.classList.add('hidden');
+        e.screen?.classList.add('hidden');
         pyErr?.classList.remove('hidden');
         resolve(false);
         return;
@@ -41,21 +140,19 @@ async function waitForBackendReady() {
         done = true;
         backendReady = true;
         if (status.api) API = status.api;
-        if (msg) msg.textContent = 'Setting up Sentinel Earn engine…';
-        setStartupProgress(5, 'Backend connected');
+        if (e.backendMsg) {
+          e.backendMsg.textContent = 'Engine connected';
+          e.backendMsg.classList.remove('hidden');
+        }
         resolve(true);
         return;
       }
-      if (status?.state === 'starting' && msg) {
-        msg.textContent = 'Starting Sentinel Earn engine…';
-        setStartupProgress(2, 'Launching Python backend…');
+      if (status?.state === 'starting' && e.backendMsg) {
+        e.backendMsg.textContent = 'Starting Sentinel Earn engine…';
       }
       if (status?.state === 'error') {
         done = true;
-        if (msg) {
-          msg.textContent = status.message || 'Backend failed to start';
-          setStartupProgress(0, status.message || 'Backend failed to start');
-        }
+        if (e.backendMsg) e.backendMsg.textContent = status.message || 'Backend failed to start';
         resolve(false);
       }
     };
@@ -68,49 +165,48 @@ async function waitForBackendReady() {
   });
 }
 
-async function pollSetupStatus() {
-  const overlay = document.getElementById('startup-overlay');
-  const setupErr = document.getElementById('setup-error');
-  const msg = document.getElementById('startup-message');
+async function pollSetupStatus(untilComplete = true) {
+  const e = setupEls();
+  e.error?.classList.add('hidden');
+  e.screen?.classList.remove('hidden');
 
   for (let i = 0; i < 7200; i++) {
     try {
       const d = await fetch(`${API}/api/setup/status`).then((r) => r.json());
-      const pct = Number(d.percent || 0);
-      setStartupProgress(pct, d.message || 'Setting up…');
+      const state = applySetupState(d);
 
-      if (d.phase === 'error' || d.error) {
-        overlay?.classList.add('hidden');
-        setupErr?.classList.remove('hidden');
-        const errMsg = document.getElementById('setup-error-message');
-        if (errMsg) errMsg.textContent = d.error || d.message || 'Setup failed.';
-        const ollamaBtn = document.getElementById('setup-ollama-btn');
-        if (ollamaBtn) {
-          const show = d.action === 'manual' && d.url;
-          ollamaBtn.classList.toggle('hidden', !show);
-          if (show) {
-            ollamaBtn.onclick = () => window.sentinelEarn?.openExternal(d.url);
-          }
-        }
-        return false;
-      }
+      if (state === 'error') return false;
 
-      if (d.complete || d.setup_complete) {
-        setupComplete = true;
-        setStartupProgress(100, 'Ready');
-        overlay?.classList.add('hidden');
+      if (state === 'ready') {
+        await new Promise((r) => setTimeout(r, 1200));
+        e.screen?.classList.add('hidden');
         return true;
       }
 
-      if (msg && d.message) msg.textContent = 'Setting up Sentinel Earn engine…';
+      if (!untilComplete && state === 'awaiting') return true;
     } catch {
-      setStartupProgress(0, 'Waiting for backend…');
+      showSetupPanel(e.detecting);
     }
-    await new Promise((r) => setTimeout(r, 1000));
+    await new Promise((r) => setTimeout(r, 800));
   }
-
-  overlay?.classList.add('hidden');
+  e.screen?.classList.add('hidden');
   return false;
+}
+
+async function runSetupFlow() {
+  await pollSetupStatus(false);
+}
+
+async function startDownload() {
+  const btn = document.getElementById('setup-download-btn');
+  if (btn) btn.disabled = true;
+  try {
+    await api('/api/setup/download', { method: 'POST', body: '{}' });
+  } catch (_) {}
+  await pollSetupStatus(true);
+  loadHealthStatus();
+  loadBounties();
+  if (btn) btn.disabled = false;
 }
 
 async function api(path, opts = {}) {
@@ -383,14 +479,16 @@ document.getElementById('goto-settings-token')?.addEventListener('click', () => 
   document.querySelector('.tab[data-tab="settings"]')?.click();
 });
 
+document.getElementById('setup-download-btn')?.addEventListener('click', () => startDownload());
+
 document.getElementById('setup-retry-btn')?.addEventListener('click', async () => {
-  document.getElementById('setup-error')?.classList.add('hidden');
-  document.getElementById('startup-overlay')?.classList.remove('hidden');
-  setStartupProgress(0, 'Retrying setup…');
+  setupEls().error?.classList.add('hidden');
+  setupEls().screen?.classList.remove('hidden');
+  showSetupPanel(setupEls().detecting);
   try {
     await api('/api/setup/retry', { method: 'POST', body: '{}' });
   } catch (_) {}
-  await pollSetupStatus();
+  await pollSetupStatus(true);
   loadHealthStatus();
   loadBounties();
 });
@@ -420,7 +518,7 @@ window.submitPatch = async (id) => {
   const ready = await waitForBackendReady();
   if (ready) await initApi();
   if (!ready) return;
-  await pollSetupStatus();
+  await runSetupFlow();
   initUpdateBanner();
   loadHealthStatus();
   loadBounties();

@@ -1,4 +1,4 @@
-"""Hardware detection for Sentinel Earn — ported from SentinelAI onboarding probes."""
+"""Hardware detection for Sentinel Earn — CPU, GPU, NPU, model recommendation."""
 from __future__ import annotations
 
 import os
@@ -8,25 +8,35 @@ import shutil
 import subprocess
 import sys
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
-from typing import Any, Callable, Dict, Optional, TypeVar
+from typing import Any, Callable, Dict, List, Optional, TypeVar
 
 T = TypeVar("T")
 
-_NVIDIA_TIMEOUT = 3.0
-_HTTP_TIMEOUT = 2.0
+_PROBE_TIMEOUT = 3.0
 _RAM_TIMEOUT = 2.0
+_NPU_TIMEOUT = 15.0
+_HTTP_TIMEOUT = 2.0
 
-EARN_MODEL_HIGH = "qwen2.5-coder:14b"
-EARN_MODEL_LOW = "qwen2.5-coder:7b"
+EARN_MODEL_14B = "qwen2.5-coder:14b"
+EARN_MODEL_7B = "qwen2.5-coder:7b"
+EARN_MODEL_3B = "qwen2.5-coder:3b"
+EARN_MODEL_1_5B = "qwen2.5-coder:1.5b"
 
 
 def _run_timed(fn: Callable[[], T], timeout: float, default: T) -> T:
     try:
         with ThreadPoolExecutor(max_workers=1, thread_name_prefix="earn-probe") as pool:
-            fut = pool.submit(fn)
-            return fut.result(timeout=timeout)
+            return pool.submit(fn).result(timeout=timeout)
     except (FuturesTimeout, Exception):
         return default
+
+
+def _probe_cpu_cores() -> int:
+    try:
+        import psutil
+        return psutil.cpu_count(logical=True) or 1
+    except Exception:
+        return 1
 
 
 def _probe_ram_gb() -> float:
@@ -39,34 +49,131 @@ def _probe_ram_gb() -> float:
 
 def _probe_cpu_name() -> str:
     try:
-        return platform.processor() or platform.machine() or "Unknown CPU"
+        name = platform.processor() or ""
+        if name.strip():
+            return name.strip()
+        import psutil
+        freq = psutil.cpu_freq()
+        if freq and freq.max:
+            return f"{_probe_cpu_cores()}-core CPU @ {round(freq.max)} MHz"
+        return f"{_probe_cpu_cores()}-core CPU"
     except Exception:
-        return "Unknown CPU"
+        return f"{_probe_cpu_cores()}-core CPU"
 
 
-def _probe_gpu_nvidia() -> Dict[str, Any]:
-    out: Dict[str, Any] = {"gpu_name": "CPU inference", "vram_gb": 0.0, "source": "cpu_fallback"}
+def _probe_nvidia_gpu() -> Optional[Dict[str, Any]]:
     try:
         proc = subprocess.run(
             ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"],
             capture_output=True,
             text=True,
-            timeout=int(_NVIDIA_TIMEOUT),
+            timeout=int(_PROBE_TIMEOUT),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         if proc.returncode == 0 and proc.stdout.strip():
             line = proc.stdout.strip().splitlines()[0]
             parts = [p.strip() for p in line.split(",")]
-            out["gpu_name"] = parts[0] if parts else "NVIDIA GPU"
+            vram = 0.0
             if len(parts) > 1:
                 try:
-                    out["vram_gb"] = round(float(parts[1]) / 1024, 1)
+                    vram = round(float(parts[1]) / 1024, 1)
                 except ValueError:
-                    out["vram_gb"] = 0.0
-            out["source"] = "nvidia-smi"
+                    pass
+            return {
+                "gpu_name": parts[0] if parts else "NVIDIA GPU",
+                "vram_gb": vram,
+                "vendor": "NVIDIA",
+                "source": "nvidia-smi",
+            }
     except Exception:
         pass
-    return out
+    return None
+
+
+def _probe_gpus_windows() -> List[Dict[str, Any]]:
+    gpus: List[Dict[str, Any]] = []
+    nvidia = _probe_nvidia_gpu()
+    if nvidia:
+        gpus.append(nvidia)
+
+    ps_script = (
+        "Get-CimInstance Win32_VideoController -ErrorAction SilentlyContinue | "
+        "Where-Object { $_.Name -and $_.Name -notmatch 'Microsoft|Remote|Virtual|Parsec|Mirror' } | "
+        "Select-Object Name, AdapterRAM | ConvertTo-Json -Compress"
+    )
+    try:
+        proc = subprocess.run(
+            ["powershell", "-NoProfile", "-Command", ps_script],
+            capture_output=True,
+            text=True,
+            timeout=int(_PROBE_TIMEOUT) + 2,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if proc.returncode != 0 or not (proc.stdout or "").strip():
+            return gpus
+        import json
+        raw = json.loads(proc.stdout)
+        entries = raw if isinstance(raw, list) else [raw]
+        for entry in entries:
+            name = (entry.get("Name") or "").strip()
+            if not name:
+                continue
+            if nvidia and name.lower() in (nvidia.get("gpu_name") or "").lower():
+                continue
+            adapter_ram = entry.get("AdapterRAM") or 0
+            vram_gb = 0.0
+            try:
+                if adapter_ram and int(adapter_ram) > 0:
+                    vram_gb = round(int(adapter_ram) / (1024 ** 3), 1)
+            except (TypeError, ValueError):
+                pass
+            vendor = "Unknown"
+            upper = name.upper()
+            if "AMD" in upper or "RADEON" in upper:
+                vendor = "AMD"
+            elif "INTEL" in upper or "IRIS" in upper or "UHD" in upper:
+                vendor = "Intel"
+            elif "NVIDIA" in upper or "GEFORCE" in upper or "RTX" in upper or "GTX" in upper:
+                vendor = "NVIDIA"
+            gpus.append({
+                "gpu_name": name,
+                "vram_gb": vram_gb,
+                "vendor": vendor,
+                "source": "win32_videocontroller",
+            })
+    except Exception:
+        pass
+    return gpus
+
+
+def _probe_gpu() -> Dict[str, Any]:
+    if sys.platform == "win32":
+        gpus = _probe_gpus_windows()
+    else:
+        gpus = []
+        nvidia = _probe_nvidia_gpu()
+        if nvidia:
+            gpus.append(nvidia)
+
+    if not gpus:
+        return {
+            "gpu_name": "CPU only",
+            "vram_gb": 0.0,
+            "vendor": "None",
+            "source": "cpu_fallback",
+            "cpu_only": True,
+            "gpus": [],
+        }
+
+    best = max(gpus, key=lambda g: float(g.get("vram_gb") or 0))
+    return {
+        "gpu_name": best.get("gpu_name", "GPU"),
+        "vram_gb": float(best.get("vram_gb") or 0),
+        "vendor": best.get("vendor", "Unknown"),
+        "source": best.get("source", "unknown"),
+        "cpu_only": False,
+        "gpus": gpus,
+    }
 
 
 def _npu_tops_from_name(name: str) -> Optional[int]:
@@ -76,11 +183,11 @@ def _npu_tops_from_name(name: str) -> Optional[int]:
 
 def _probe_npu() -> Dict[str, Any]:
     if sys.platform != "win32":
-        return {"npu_present": False, "tops": None, "device_name": None}
+        return {"npu_present": False, "tops": None, "device_name": None, "vendor": None}
     ps_script = (
         "Get-CimInstance Win32_PnPEntity -ErrorAction SilentlyContinue | "
         "Where-Object { "
-        "$_.Name -match 'NPU|Neural Processing|AI Boost|XDNA|Hexagon.*NPU|Intel.*NPU|Qualcomm.*NPU' "
+        "$_.Name -match 'NPU|Neural Processing|AI Boost|XDNA|Hexagon.*NPU|Intel.*NPU|Qualcomm.*NPU|Snapdragon' "
         "-and $_.Name -notmatch 'Bluetooth|XINPUT|Audio|Speaker|Microphone' "
         "} | Select-Object -First 5 -ExpandProperty Name"
     )
@@ -89,21 +196,23 @@ def _probe_npu() -> Dict[str, Any]:
             ["powershell", "-NoProfile", "-Command", ps_script],
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=int(_NPU_TIMEOUT),
             creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
         )
         lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
         if not lines:
-            return {"npu_present": False, "tops": None, "device_name": None}
+            return {"npu_present": False, "tops": None, "device_name": None, "vendor": None}
+        device = lines[0]
         tops = None
         for ln in lines:
             parsed = _npu_tops_from_name(ln)
             if parsed is not None:
                 tops = parsed
                 break
-        return {"npu_present": True, "tops": tops, "device_name": lines[0]}
+        vendor = "Qualcomm" if re.search(r"qualcomm|snapdragon|hexagon", device, re.I) else "NPU"
+        return {"npu_present": True, "tops": tops, "device_name": device, "vendor": vendor}
     except Exception:
-        return {"npu_present": False, "tops": None, "device_name": None}
+        return {"npu_present": False, "tops": None, "device_name": None, "vendor": None}
 
 
 def _probe_ollama_installed() -> bool:
@@ -126,46 +235,130 @@ def _probe_ollama_running(host: str = "http://127.0.0.1:11434") -> bool:
         return False
 
 
-def recommend_earn_model(ram_gb: float, vram_gb: float) -> Dict[str, Any]:
-    """Pick qwen2.5-coder:14b on capable hardware, else 7b."""
-    use_14b = ram_gb >= 16.0 or vram_gb >= 8.0
-    model = EARN_MODEL_HIGH if use_14b else EARN_MODEL_LOW
+def recommend_earn_model(
+    ram_gb: float,
+    vram_gb: float,
+    *,
+    cpu_only: bool = False,
+    npu_present: bool = False,
+) -> Dict[str, Any]:
+    """Tiered model selection based on RAM, VRAM, CPU-only, and NPU."""
+    if ram_gb < 8.0:
+        model = EARN_MODEL_1_5B
+        reason = f"Your system has {ram_gb}GB RAM — we use the lightest model for stability."
+        tier = "minimal"
+    elif npu_present:
+        model = EARN_MODEL_3B
+        reason = "Your NPU-equipped device runs best with the compact 3B model optimized for efficiency."
+        tier = "balanced"
+    elif vram_gb >= 16.0:
+        model = EARN_MODEL_14B
+        reason = f"Your {vram_gb}GB VRAM GPU can run the largest coder model for best patch quality."
+        tier = "ultra"
+    elif vram_gb >= 8.0:
+        model = EARN_MODEL_7B
+        reason = f"Your {vram_gb}GB VRAM GPU is a great fit for the balanced 7B coder model."
+        tier = "high"
+    elif vram_gb >= 4.0 or cpu_only:
+        model = EARN_MODEL_3B
+        if cpu_only:
+            reason = "No discrete GPU detected — the 3B model is optimized for CPU inference."
+        else:
+            reason = f"Your {vram_gb}GB VRAM GPU works well with the efficient 3B coder model."
+        tier = "balanced"
+    else:
+        model = EARN_MODEL_3B
+        reason = "Based on your hardware we recommend the efficient 3B model."
+        tier = "balanced"
+
     return {
         "model": model,
-        "tier": "high" if use_14b else "low",
+        "tier": tier,
+        "reason": reason,
+        "explanation": f"Based on your hardware we recommend {model} — optimized for your device.",
         "ram_gb": ram_gb,
         "vram_gb": vram_gb,
-        "reason": (
-            "16GB+ RAM or 8GB+ VRAM detected"
-            if use_14b
-            else "Using lighter model for this machine"
-        ),
+        "cpu_only": cpu_only,
+        "npu_present": npu_present,
+    }
+
+
+def format_hardware_summary(profile: Dict[str, Any]) -> Dict[str, str]:
+    """Human-readable hardware lines for the setup UI."""
+    cpu = profile.get("cpu_name") or "Unknown CPU"
+    cores = profile.get("cpu_cores") or "?"
+    ram = profile.get("ram_gb") or "?"
+    gpu = profile.get("gpu_name") or "CPU only"
+    vram = profile.get("vram_gb") or 0
+    vendor = profile.get("gpu_vendor") or ""
+
+    gpu_line = f"{gpu}"
+    if vram and float(vram) > 0:
+        gpu_line += f" ({vram}GB VRAM)"
+    elif profile.get("cpu_only"):
+        gpu_line = "No discrete GPU — CPU inference"
+
+    npu_line = None
+    if profile.get("npu_present"):
+        npu_line = profile.get("npu_device") or "Neural Processing Unit detected"
+        if profile.get("npu_vendor"):
+            npu_line = f"{profile['npu_vendor']} NPU — {npu_line}"
+
+    return {
+        "cpu": f"{cpu} ({cores} cores)",
+        "ram": f"{ram} GB system memory",
+        "gpu": gpu_line if not profile.get("npu_present") or vendor != "None" else gpu_line,
+        "npu": npu_line or "",
+        "accelerator": npu_line or gpu_line,
     }
 
 
 def probe_machine_profile(ollama_host: str = "http://127.0.0.1:11434") -> Dict[str, Any]:
     ram_gb = _run_timed(_probe_ram_gb, _RAM_TIMEOUT, 8.0)
-    gpu = _run_timed(_probe_gpu_nvidia, _NVIDIA_TIMEOUT, {
-        "gpu_name": "CPU inference",
+    cpu_cores = _run_timed(_probe_cpu_cores, 1.0, 1)
+    gpu = _run_timed(_probe_gpu, _PROBE_TIMEOUT + 2, {
+        "gpu_name": "CPU only",
         "vram_gb": 0.0,
+        "vendor": "None",
         "source": "cpu_fallback",
+        "cpu_only": True,
+        "gpus": [],
     })
-    npu = _run_timed(_probe_npu, 15.0, {"npu_present": False, "tops": None, "device_name": None})
+    npu = _run_timed(_probe_npu, _NPU_TIMEOUT, {
+        "npu_present": False,
+        "tops": None,
+        "device_name": None,
+        "vendor": None,
+    })
     ollama_installed = _run_timed(_probe_ollama_installed, 1.0, False)
     ollama_running = _run_timed(lambda: _probe_ollama_running(ollama_host), _HTTP_TIMEOUT + 0.5, False)
-    rec = recommend_earn_model(ram_gb, float(gpu.get("vram_gb") or 0))
 
-    return {
+    rec = recommend_earn_model(
+        ram_gb,
+        float(gpu.get("vram_gb") or 0),
+        cpu_only=bool(gpu.get("cpu_only")),
+        npu_present=bool(npu.get("npu_present")),
+    )
+
+    profile = {
         "os": platform.system(),
         "cpu_name": _probe_cpu_name(),
+        "cpu_cores": cpu_cores,
         "ram_gb": ram_gb,
         "vram_gb": gpu.get("vram_gb", 0.0),
-        "gpu_name": gpu.get("gpu_name", "CPU inference"),
+        "gpu_name": gpu.get("gpu_name", "CPU only"),
+        "gpu_vendor": gpu.get("vendor", "None"),
         "gpu_probe_source": gpu.get("source", "unknown"),
+        "cpu_only": gpu.get("cpu_only", True),
+        "gpus": gpu.get("gpus", []),
         "npu_present": npu.get("npu_present", False),
         "npu_device": npu.get("device_name"),
+        "npu_vendor": npu.get("vendor"),
         "ollama_installed": ollama_installed,
         "ollama_running": ollama_running,
         "recommended_model": rec["model"],
         "model_recommendation": rec,
+        "hardware_summary": {},
     }
+    profile["hardware_summary"] = format_hardware_summary(profile)
+    return profile

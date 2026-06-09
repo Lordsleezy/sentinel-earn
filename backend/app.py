@@ -33,7 +33,7 @@ app = Flask(__name__)
 CORS(app, resources={r"/api/*": {"origins": "*"}})
 
 start_background_worker(interval_sec=45)
-get_setup_engine().start_background()
+get_setup_engine().initialize()
 
 
 @app.route("/api/ping")
@@ -139,6 +139,12 @@ def setup_status():
         "ollama_running": ollama_runtime.ollama_running(),
         "ready_model": ready.get("model"),
     })
+
+
+@app.route("/api/setup/download", methods=["POST"])
+def setup_download():
+    started = get_setup_engine().start_download()
+    return jsonify({"status": "started" if started else "already_running"})
 
 
 @app.route("/api/setup/retry", methods=["POST"])

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 DEFAULT_OLLAMA_HOST = "http://127.0.0.1:11434"
-DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:14b"
+DEFAULT_OLLAMA_MODEL = "qwen2.5-coder:3b"
 APP_NAME = "Sentinel Earn"
 
 

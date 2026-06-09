@@ -1,4 +1,4 @@
-"""Ollama install, start, and model pull — adapted from SentinelAI model_runtime."""
+"""Ollama install, start, and model pull — in-app only, no browser."""
 from __future__ import annotations
 
 import json
@@ -18,6 +18,14 @@ from sentinel_earn.config import get_data_dir, load_settings
 logger = logging.getLogger("sentinel_earn.ollama")
 
 OLLAMA_WIN_INSTALLER = "https://ollama.com/download/OllamaSetup.exe"
+
+# Approximate model sizes for progress when total unknown (GB)
+MODEL_SIZE_GB = {
+    "qwen2.5-coder:14b": 9.0,
+    "qwen2.5-coder:7b": 4.7,
+    "qwen2.5-coder:3b": 2.0,
+    "qwen2.5-coder:1.5b": 1.0,
+}
 
 
 def _utc() -> str:
@@ -51,6 +59,12 @@ def _ollama_cli() -> Optional[str]:
         return exe
     win = _windows_ollama_exe()
     return str(win) if win else None
+
+
+def clear_ready() -> None:
+    path = _runtime_dir() / "ready.json"
+    if path.is_file():
+        path.unlink(missing_ok=True)
 
 
 def ollama_installed() -> bool:
@@ -126,26 +140,73 @@ def ensure_ollama_running() -> Dict[str, Any]:
         if ollama_running():
             return {"ok": True, "action": "started"}
         time.sleep(2)
-    return {"ok": False, "action": "start_timeout", "user_message": "Ollama did not start in time."}
+    return {"ok": False, "user_message": "Ollama did not start. Tap Retry to try again."}
+
+
+def _parse_size_to_mb(text: str) -> Optional[float]:
+    m = re.search(r"([\d.]+)\s*(GB|MB|KB)", text, re.I)
+    if not m:
+        return None
+    val = float(m.group(1))
+    unit = m.group(2).upper()
+    if unit == "GB":
+        return val * 1024
+    if unit == "KB":
+        return val / 1024
+    return val
+
+
+def _parse_pull_progress(line: str, model_name: str, started_at: float) -> Dict[str, Any]:
+    info: Dict[str, Any] = {"message": line[:200], "model": model_name}
+    pct_m = re.search(r"(\d+)\s*%", line)
+    if pct_m:
+        info["percent"] = int(pct_m.group(1))
+
+    # e.g. 1.2 GB/4.7 GB  or  450 MB/1.8 GB
+    frac = re.search(
+        r"([\d.]+\s*(?:GB|MB|KB))\s*/\s*([\d.]+\s*(?:GB|MB|KB))",
+        line,
+        re.I,
+    )
+    if frac:
+        done_mb = _parse_size_to_mb(frac.group(1)) or 0
+        total_mb = _parse_size_to_mb(frac.group(2)) or 0
+        info["downloaded_mb"] = round(done_mb, 1)
+        info["total_mb"] = round(total_mb, 1)
+        if total_mb > 0 and "percent" not in info:
+            info["percent"] = min(99, int(done_mb * 100 / total_mb))
+
+    speed_m = re.search(r"([\d.]+\s*(?:GB|MB|KB))/s", line, re.I)
+    eta_m = re.search(r"(\d+)\s*s(?:\s|$)", line)
+    if eta_m:
+        info["eta_seconds"] = int(eta_m.group(1))
+    elif speed_m and info.get("downloaded_mb") and info.get("total_mb"):
+        speed_mb = _parse_size_to_mb(speed_m.group(1)) or 0
+        if speed_mb > 0:
+            remaining = max(0, info["total_mb"] - info["downloaded_mb"])
+            info["eta_seconds"] = int(remaining / speed_mb)
+
+    if "percent" not in info:
+        elapsed = max(0.1, time.time() - started_at)
+        est_gb = MODEL_SIZE_GB.get(model_name, 3.0)
+        est_mb = est_gb * 1024
+        # Rough fallback from elapsed time when ollama omits percent
+        info["total_mb"] = info.get("total_mb") or round(est_mb, 1)
+
+    return info
 
 
 def install_ollama_windows(
     progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None,
 ) -> Dict[str, Any]:
-    if platform.system() != "Windows":
-        return {
-            "ok": False,
-            "action": "manual",
-            "url": "https://ollama.com/download",
-            "user_message": "Install Ollama from ollama.com, then restart Sentinel Earn.",
-        }
     if ollama_installed():
         return ensure_ollama_running()
 
     dest = _runtime_dir() / "OllamaSetup.exe"
+    started = time.time()
     try:
         import httpx
-        with httpx.stream("GET", OLLAMA_WIN_INSTALLER, follow_redirects=True, timeout=120) as resp:
+        with httpx.stream("GET", OLLAMA_WIN_INSTALLER, follow_redirects=True, timeout=300) as resp:
             resp.raise_for_status()
             total = int(resp.headers.get("content-length") or 0)
             done = 0
@@ -154,20 +215,31 @@ def install_ollama_windows(
                     f.write(chunk)
                     done += len(chunk)
                     pct = int(done * 100 / total) if total else min(95, done // 500000)
+                    elapsed = max(0.1, time.time() - started)
+                    speed = done / elapsed
+                    eta = int((total - done) / speed) if total and speed > 0 else None
                     if progress_cb:
-                        progress_cb({"download_percent": pct, "message": "Downloading Ollama installer…"})
+                        progress_cb({
+                            "phase": "installing_ollama",
+                            "percent": pct,
+                            "downloaded_mb": round(done / (1024 * 1024), 1),
+                            "total_mb": round(total / (1024 * 1024), 1) if total else None,
+                            "eta_seconds": eta,
+                            "message": "Downloading Ollama runtime…",
+                        })
     except Exception as e:
         logger.exception("ollama download failed")
         return {
             "ok": False,
-            "action": "manual",
-            "url": "https://ollama.com/download",
-            "error": str(e)[:200],
-            "user_message": "Could not download Ollama automatically. Install from ollama.com.",
+            "user_message": f"Could not download Ollama ({str(e)[:80]}). Check your connection and tap Retry.",
         }
 
     if progress_cb:
-        progress_cb({"download_percent": 100, "message": "Installing Ollama…"})
+        progress_cb({
+            "phase": "installing_ollama",
+            "percent": 100,
+            "message": "Installing Ollama silently…",
+        })
 
     for flag in ("/SILENT", "/VERYSILENT", "/S"):
         try:
@@ -187,12 +259,7 @@ def install_ollama_windows(
             return ensure_ollama_running()
         time.sleep(3)
 
-    return {
-        "ok": False,
-        "action": "manual",
-        "url": "https://ollama.com/download",
-        "user_message": "Ollama install did not complete. Download from ollama.com and retry.",
-    }
+    return {"ok": False, "user_message": "Ollama install did not finish. Tap Retry to try again."}
 
 
 def install_ollama(progress_cb: Optional[Callable[[Dict[str, Any]], None]] = None) -> Dict[str, Any]:
@@ -200,17 +267,7 @@ def install_ollama(progress_cb: Optional[Callable[[Dict[str, Any]], None]] = Non
         return ensure_ollama_running()
     if platform.system() == "Windows":
         return install_ollama_windows(progress_cb)
-    return {
-        "ok": False,
-        "action": "manual",
-        "url": "https://ollama.com/download",
-        "user_message": "Install Ollama from ollama.com, then restart Sentinel Earn.",
-    }
-
-
-def _parse_pull_percent(line: str) -> Optional[int]:
-    m = re.search(r"(\d+)\s*%", line)
-    return int(m.group(1)) if m else None
+    return {"ok": False, "user_message": "Automatic Ollama install is supported on Windows. Tap Retry or reinstall the app."}
 
 
 def pull_model(
@@ -224,7 +281,10 @@ def pull_model(
 
     cli = _ollama_cli()
     if not cli:
-        return {"ok": False, "user_message": "Ollama CLI not found."}
+        return {"ok": False, "user_message": "Ollama CLI not found. Tap Retry to reinstall."}
+
+    started_at = time.time()
+    est_mb = MODEL_SIZE_GB.get(model_name, 3.0) * 1024
 
     try:
         proc = subprocess.Popen(
@@ -240,17 +300,21 @@ def pull_model(
             line = line.strip()
             if not line:
                 continue
-            pct = _parse_pull_percent(line) or last_pct
-            last_pct = max(last_pct, pct)
+            parsed = _parse_pull_progress(line, model_name, started_at)
+            last_pct = max(last_pct, int(parsed.get("percent") or 0))
+            parsed["percent"] = last_pct
+            parsed["phase"] = "pulling_model"
+            if "total_mb" not in parsed:
+                parsed["total_mb"] = round(est_mb, 1)
             if progress_cb:
-                progress_cb({"percent": last_pct, "message": line[:200], "model": model_name})
+                progress_cb(parsed)
         proc.wait(timeout=3600)
         ok = proc.returncode == 0
-        return {"ok": ok, "model": model_name, "user_message": "Model ready." if ok else "Model download failed."}
+        return {"ok": ok, "model": model_name, "user_message": "Model ready." if ok else "Model download failed. Tap Retry."}
     except FileNotFoundError:
-        return {"ok": False, "user_message": "Ollama CLI not found."}
+        return {"ok": False, "user_message": "Ollama CLI not found. Tap Retry."}
     except Exception as e:
-        return {"ok": False, "error": str(e)[:200], "user_message": "Model download failed."}
+        return {"ok": False, "error": str(e)[:200], "user_message": "Model download failed. Tap Retry."}
 
 
 def save_ready(model: str, profile: Dict[str, Any]) -> None:

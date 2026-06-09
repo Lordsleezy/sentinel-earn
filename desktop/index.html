@@ -7,21 +7,48 @@
   <link rel="stylesheet" href="styles.css" />
 </head>
 <body>
-  <div id="startup-overlay" class="startup-overlay">
+  <div id="setup-screen" class="startup-overlay">
     <span class="orb large"></span>
-    <p id="startup-message">Setting up Sentinel Earn engine…</p>
-    <div class="setup-progress-wrap">
-      <div class="setup-progress-bar"><div id="setup-progress-fill" class="setup-progress-fill"></div></div>
-      <p id="setup-progress-detail" class="setup-progress-detail"></p>
+    <h2 id="setup-title" class="setup-title">Setting up Sentinel Earn</h2>
+    <p id="setup-backend-msg" class="setup-sub">Starting engine…</p>
+
+    <div id="setup-detecting" class="setup-panel">
+      <p class="setup-sub">Detecting your hardware…</p>
+    </div>
+
+    <div id="setup-hardware-panel" class="setup-panel hidden">
+      <div class="hw-grid">
+        <div class="hw-row"><span class="hw-label">CPU</span><span id="hw-cpu" class="hw-value">—</span></div>
+        <div class="hw-row"><span class="hw-label">Memory</span><span id="hw-ram" class="hw-value">—</span></div>
+        <div class="hw-row"><span class="hw-label">GPU</span><span id="hw-gpu" class="hw-value">—</span></div>
+        <div class="hw-row hidden" id="hw-npu-row"><span class="hw-label">NPU</span><span id="hw-npu" class="hw-value">—</span></div>
+      </div>
+      <div class="setup-recommendation">
+        <p id="setup-rec-text" class="setup-rec-text"></p>
+        <p id="setup-model-name" class="setup-model-name"></p>
+      </div>
+      <button type="button" id="setup-download-btn" class="btn primary setup-download-btn">Download</button>
+    </div>
+
+    <div id="setup-progress-panel" class="setup-panel hidden">
+      <p id="setup-progress-model" class="setup-model-name"></p>
+      <div class="setup-progress-wrap">
+        <div class="setup-progress-bar"><div id="setup-progress-fill" class="setup-progress-fill"></div></div>
+        <p id="setup-progress-stats" class="setup-progress-stats"></p>
+        <p id="setup-progress-detail" class="setup-progress-detail"></p>
+      </div>
+    </div>
+
+    <div id="setup-ready-panel" class="setup-panel hidden">
+      <h2 class="setup-ready-title">Sentinel Earn is ready</h2>
+      <p class="setup-sub">Your bounty engine is online.</p>
     </div>
   </div>
+
   <div id="setup-error" class="startup-overlay hidden" role="alert">
     <h2>Setup needs attention</h2>
     <p id="setup-error-message"></p>
-    <div class="setup-error-actions">
-      <button type="button" id="setup-retry-btn" class="btn primary">Retry setup</button>
-      <button type="button" id="setup-ollama-btn" class="btn ghost hidden">Download Ollama</button>
-    </div>
+    <button type="button" id="setup-retry-btn" class="btn primary">Retry setup</button>
   </div>
   <div id="python-error" class="startup-overlay hidden" role="alert">
     <h2>Python required</h2>

@@ -73,9 +73,42 @@ body {
 
 .status-group { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
 
+.setup-title { margin: 0; color: var(--teal); font-size: 1.35rem; }
+.setup-sub { margin: 0; color: var(--muted); font-size: 0.9rem; }
+.setup-panel { width: min(480px, 92vw); margin-top: 12px; }
+.setup-panel.hidden { display: none; }
+
+.hw-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 16px;
+}
+.hw-row { display: flex; justify-content: space-between; gap: 12px; font-size: 0.85rem; }
+.hw-label { color: var(--muted); flex-shrink: 0; }
+.hw-value { color: var(--text); text-align: right; }
+
+.setup-recommendation {
+  background: rgba(0, 212, 170, 0.08);
+  border: 1px solid var(--teal-dim);
+  border-radius: var(--radius);
+  padding: 14px 16px;
+  margin-bottom: 18px;
+  text-align: left;
+}
+.setup-rec-text { margin: 0 0 8px; font-size: 0.88rem; color: var(--text); line-height: 1.45; }
+.setup-model-name { margin: 0; font-size: 0.95rem; color: var(--teal); font-weight: 600; }
+.setup-download-btn { min-width: 200px; }
+.setup-ready-title { margin: 0 0 8px; color: var(--teal); }
+
 .setup-progress-wrap { width: min(420px, 90vw); margin-top: 8px; }
 .setup-progress-bar {
-  height: 6px;
+  height: 8px;
   border-radius: 999px;
   background: var(--surface2);
   border: 1px solid var(--border);
@@ -87,13 +120,18 @@ body {
   background: linear-gradient(90deg, var(--teal-dim), var(--teal));
   transition: width 0.35s ease;
 }
+.setup-progress-stats {
+  margin: 10px 0 4px;
+  font-size: 0.85rem;
+  color: var(--text);
+  min-height: 1.2em;
+}
 .setup-progress-detail {
-  margin: 10px 0 0;
+  margin: 0;
   font-size: 0.82rem;
   color: var(--muted);
   min-height: 1.2em;
 }
-.setup-error-actions { display: flex; gap: 10px; justify-content: center; flex-wrap: wrap; }
 
 main { padding: 24px; max-width: 1400px; margin: 0 auto; }
 .panel { display: none; }
